@@ -37,6 +37,10 @@ sub connect {
   $self->{timer} = $reactor->timer($args->{timeout} || 10,
     sub { $self->emit(error => 'Connect timeout') });
 
+  # No name resolution required for UNIX sockets
+  return $reactor->next_tick(sub { $self && $self->_connect($args) })
+    if defined $args->{path};
+
   # Blocking name resolution
   $_ && s/[[\]]//g for @$args{qw(address socks_address)};
   my $address = $args->{socks_address} || ($args->{address} ||= '127.0.0.1');
@@ -72,18 +76,36 @@ sub _connect {
   my ($self, $args) = @_;
 
   my $handle;
-  my $address = $args->{socks_address} || $args->{address};
+  my $class;
   unless ($handle = $self->{handle} = $args->{handle}) {
-    my %options = (PeerAddr => $address, PeerPort => _port($args));
-    %options = (PeerAddrInfo => $args->{addr_info}) if $args->{addr_info};
-    $options{Blocking} = 0;
-    $options{LocalAddr} = $args->{local_address} if $args->{local_address};
+    my %options = (Blocking => 0);
+    if (defined $args->{path}) {
+      $options{Peer} = $args->{path};
+      require IO::Socket::UNIX;
+      $class = 'IO::Socket::UNIX';
+    }
+    else {
+      if ($args->{addr_info}) {
+        $options{PeerAddrInfo} = $args->{addr_info};
+      }
+      else {
+        $options{PeerAddr} = $args->{socks_address} || $args->{address};
+        $options{PeerPort} = _port($args);
+      }
+      $options{LocalAddr} = $args->{local_address} if $args->{local_address};
+      $class = 'IO::Socket::IP';
+    }
     return $self->emit(error => "Can't connect: $@")
-      unless $self->{handle} = $handle = IO::Socket::IP->new(%options);
+      unless $self->{handle} = $handle = $class->new(%options);
   }
   $handle->blocking(0);
 
-  $self->_wait('_ready', $handle, $args);
+  if (defined $args->{path}) {
+    $self->_try_socks($args);
+  }
+  else {
+    $self->_wait('_ready', $handle, $args);
+  }
 }
 
 sub _port { $_[0]{socks_port} || $_[0]{port} || ($_[0]{tls} ? 443 : 80) }
@@ -253,9 +275,10 @@ True if L<IO::Socket::SOCKS> 0.64+ is installed and SOCKS5 support enabled.
   $client->connect(address => '127.0.0.1', port => 3000);
   $client->connect({address => '127.0.0.1', port => 3000});
 
-Open a socket connection to a remote host. Note that non-blocking name
-resolution depends on L<Net::DNS::Native> (0.15+), SOCKS5 support on
-L<IO::Socket::Socks> (0.64), and TLS support on L<IO::Socket::SSL> (1.94+).
+Open a socket connection to a remote host or to a local UNIX
+service. Note that non-blocking name resolution depends on
+L<Net::DNS::Native> (0.15+), SOCKS5 support on L<IO::Socket::Socks>
+(0.64), and TLS support on L<IO::Socket::SSL> (1.94+).
 
 These options are currently available:
 
@@ -284,6 +307,12 @@ Local address to bind to.
   port => 80
 
 Port to connect to, defaults to C<80> or C<443> with C<tls> option.
+
+=item path
+
+  path => '/tmp/service.sock'
+
+Path to the UNIX socket to connect to.
 
 =item socks_address
 

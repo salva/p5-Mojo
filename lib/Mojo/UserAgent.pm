@@ -79,8 +79,13 @@ sub _connect {
 
   my $t = $self->transactor;
   my ($proto, $host, $port) = $peer ? $t->peer($tx) : $t->endpoint($tx);
-  my %options
-    = (address => $host, port => $port, timeout => $self->connect_timeout);
+  my %options = (timeout => $self->connect_timeout);
+  if ($proto eq 'http+unix') {
+    $options{path} = $host;
+  }
+  else {
+    @options{qw(address port)} = ($host, $port);
+  }
   if (my $local = $self->local_address) { $options{local_address} = $local }
   $options{handle} = $handle if $handle;
 
@@ -155,9 +160,10 @@ sub _connected {
   my $stream = $c->{ioloop}->stream($id)->timeout($self->inactivity_timeout);
   my $tx     = $c->{tx}->connection($id);
   my $handle = $stream->handle;
-  $tx->local_address($handle->sockhost)->local_port($handle->sockport);
-  $tx->remote_address($handle->peerhost)->remote_port($handle->peerport);
-
+  eval {
+      $tx->local_address($handle->sockhost)->local_port($handle->sockport);
+      $tx->remote_address($handle->peerhost)->remote_port($handle->peerport);
+  };
   weaken $self;
   $tx->on(resume => sub { $self->_write($id) });
   $self->_write($id);
@@ -420,6 +426,14 @@ Mojo::UserAgent - Non-blocking I/O HTTP and WebSocket user agent
     $tx->send({json => {msg => 'Hello World!'}});
   });
   Mojo::IOLoop->start unless Mojo::IOLoop->is_running;
+
+  # Interacting with an HTTP service listening in an UNIX socket:
+  my $socket_path = '/tmp/service.sock';
+  my $url = 'http+unix://'.url_escape($socket_path).'/test');
+  my $res1 = $ua->get($url)->result;
+  my $res2 = $ua->post($url => json => {data => 'lolailo'})->result;
+  # Some servers expect a regular Host header:
+  my $res3 = $ua->get($url, {Host => 'localhost'})->result;
 
 =head1 DESCRIPTION
 
@@ -903,6 +917,35 @@ but also increases memory usage by up to 300KB per connection.
   $ua->websocket('ws://example.com/foo' => {
     'Sec-WebSocket-Extensions' => 'permessage-deflate'
   } => sub {...});
+
+=head1 UNIX SOCKETS
+
+In some occasions you may need to access an HTTP service listening on
+an UNIX socket. A common case, for instance, is accessing the API for a
+Docker service running on the local machine.
+
+In order to access those services, Mojo::UserAgent accepts URLs with
+the scheme C<http+unix>. The path to the UNIX socket has to be passed
+URL-escaped in the socket slot. For instance, for accessing a service
+listening at C</tmp/foo.sock>, you have to pass Mojo::UserAgent, URLs
+starting by C<http+unix://%2Ftmp%2Ffoo.sock/> as in the following
+example:
+
+  use Mojo::Util 'url_escape';
+  my $base_url = 'http+unix://' . url_escape('/tmp/foo.sock');
+  my $res = $ua->get("$base_url/bar/doz")->res;
+
+The C<http+unix> scheme can be used in any of the methods provided by
+the module requiring an URL (i.e. C<get>, C<put>, C<post>,
+C<websocket>, etc.)  and the same user-agent object can be used to
+access both TCP and UNIX HTTP services.
+
+By default, the socket path is also used as the C<Host> header value
+in the HTTP request sent, but some servers expect to find a regular
+host name there. In those cases, you have to force a more
+server-friendly C<Host> header as in the following call:
+
+  my $res = $ua->get('http+unix://%2Ftmp%2Ffoo.sock/', {Host=>'localhost'})->res;
 
 =head1 DEBUGGING
 

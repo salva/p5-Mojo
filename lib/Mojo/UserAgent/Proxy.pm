@@ -54,6 +54,8 @@ Mojo::UserAgent::Proxy - User agent proxy manager
 
 L<Mojo::UserAgent::Proxy> manages proxy servers for L<Mojo::UserAgent>.
 
+SOCKS, HTTP, and HTTP-over-UNIX-socket proxies are supported.
+
 =head1 ATTRIBUTES
 
 L<Mojo::UserAgent::Proxy> implements the following attributes.
@@ -103,6 +105,17 @@ Check if request for domain would use a proxy server.
   $proxy->prepare(Mojo::Transaction::HTTP->new);
 
 Prepare proxy server information for transaction.
+
+=head1 HTTP-OVER-UNIX-SOCKET PROXIES
+
+HTTP proxy services listening in UNIX sockets can be configured
+passing URLs with the C<http+unix> scheme and the socket path in the
+URL-escaped in the host slot. For example:
+
+  use Mojo::Util 'url_escape';
+  my $proxy_path = '/tmp/proxy.sock';
+  my $proxy_url = 'http+unix://'.url_escape($proxy_path);
+  $proxy->http($proxy_url);
 
 =head1 SEE ALSO
 
